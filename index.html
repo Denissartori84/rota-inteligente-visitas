@@ -746,10 +746,11 @@ function resetParams() {
         endereco_maps: `${m.endereco}, ${m.bairro}, ${m.cidade}, SC`,
       }));
       const byCrm = new Map(medicos.map((m) => [m.crm, m]));
-      const rotas = rotasRaw.map((r) => ({
-        ...r,
-        stops: r.stops.map((crm) => byCrm.get(crm)).filter(Boolean),
-      }));
+      const rotas = rotasRaw.map((r) => {
+        const stops = r.stops.map((crm) => byCrm.get(crm)).filter(Boolean)
+          .map((m) => ({ ...m, horario_ref: fmtTime(earliestMinutes(m)) }));
+        return { ...r, stops, maps_url: buildMapsUrl(stops) };
+      });
       MEDICOS = medicos;
       ROTAS = rotas;
       window.renderAll();
