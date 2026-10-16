@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rota Inteligente de Visitas Médicas</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #1b1e23;
+    --panel: #23272e;
+    --border: #363c44;
+    --fg: #edf0f2;
+    --fg-muted: #99a1ab;
+    --ok: #3ddc97;
+    --warn: #f5a623;
+    --bad: #f0615f;
+    --radius: 10px;
+    --gap-sm: .6rem; --gap-md: 1rem; --gap-lg: 1.5rem;
+    --pad-sm: .5rem; --pad-md: 1rem; --pad-lg: 1.25rem;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-serif: Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; min-width: 0; }
+  html, body { background: var(--bg); color: var(--fg); margin: 0; }
+  body { font-family: var(--font-sans); padding: 1.5rem; max-width: 1400px; margin-inline: auto; overflow-x: hidden; }
+  a { color: inherit; }
+  img, svg { max-width: 100%; }
+
+  @media (max-width: 640px) {
+    body { padding: .85rem; }
+    .topbar { flex-direction: column; align-items: flex-start; padding: var(--pad-md); }
+    .topbar-title { font-size: 1.15rem; }
+    .kpi .val { font-size: 1.5rem; }
+    .tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+    .tab-btn { flex: none; white-space: nowrap; }
+    .card { padding: var(--pad-md); }
+    .filters { flex-direction: column; align-items: stretch; }
+    .filters select, .filters input[type="text"] { width: 100%; }
+    .urgent-picker { flex-direction: column; }
+    .urgent-picker button { width: 100%; }
+  }
+
+  .topbar {
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .4rem;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: var(--pad-md) var(--pad-lg); margin-bottom: var(--gap-lg);
+  }
+  .topbar-title { font-family: var(--font-serif); font-weight: 400; font-size: 1.4rem; margin: 0; }
+  .topbar-meta { font-size: .8rem; color: var(--fg-muted); white-space: nowrap; }
+  .takeaway { margin: .5rem 0 var(--gap-lg) 0; color: var(--fg-muted); font-size: .95rem; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: var(--gap-md); margin-bottom: var(--gap-lg); }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-top: 3px solid var(--kpi-accent, var(--border)); border-radius: var(--radius); padding: var(--pad-lg); }
+  .kpi .lbl { font-size: .72rem; color: var(--fg-muted); margin-bottom: .4rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  .kpi .val { font-family: var(--font-serif); font-size: 1.9rem; font-variant-numeric: tabular-nums; line-height: 1; color: var(--kpi-accent, var(--fg)); }
+  .kpi .sub { font-size: .78rem; color: var(--fg-muted); margin-top: .3rem; }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: .25rem; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: .3rem; margin-bottom: var(--gap-lg); }
+  .tab-btn { font-family: var(--font-sans); font-size: .92rem; font-weight: 600; color: var(--fg-muted); background: none; border: none; border-radius: calc(var(--radius) - 3px); padding: .5rem 1rem; cursor: pointer; }
+  .tab-btn:hover { color: var(--fg); }
+  .tab-btn.active { background: var(--fg); color: var(--bg); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: var(--gap-md); margin-bottom: var(--gap-lg); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--pad-lg); }
+  .card h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 .15rem 0; }
+  .card .note { font-size: .8rem; color: var(--fg-muted); margin-bottom: var(--pad-md); }
+  .chartbox { min-height: 220px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: center; margin-top: var(--pad-sm); }
+  .legend .litem { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--fg-muted); }
+  .legend .swatch { width: .6rem; height: .6rem; border-radius: 2px; display: inline-block; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: var(--gap-sm); align-items: center; margin-bottom: var(--gap-lg); }
+  .filters select, .filters input[type="text"] {
+    font-family: var(--font-sans); font-size: .92rem; padding: .4rem .6rem; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+  }
+  .filters input[type="text"] { min-width: 14rem; flex: 1 1 14rem; }
+  .filters .lx-reset { font-size: .8rem; color: var(--fg-muted); background: none; border: none; cursor: pointer; text-decoration: underline; }
+  .chipgroup { display: inline-flex; gap: .3rem; flex-wrap: wrap; align-items: center; }
+  .chipgroup .glabel { font-size: .78rem; color: var(--fg-muted); margin-right: .15rem; }
+  .chipbtn {
+    font-size: .8rem; font-weight: 600; padding: .35rem .7rem; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg-muted); cursor: pointer;
+  }
+  .chipbtn.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; font-weight: 600; }
+  .badge.pendente { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .badge.visitado { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .badge.semmeta { background: color-mix(in srgb, var(--fg-muted) 18%, transparent); color: var(--fg-muted); }
+
+  .qbadge { font-size: 10px; font-weight: 600; line-height: 1; padding: .1rem .3rem; border-radius: 4px; background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+  .tbadge { font-size: 10px; font-weight: 600; line-height: 1; padding: .1rem .3rem; border-radius: 4px; background: var(--bg); color: var(--fg-muted); border: 1px solid var(--border); }
+
+  .daytitle { font-family: var(--font-serif); font-size: 1.1rem; margin: var(--gap-lg) 0 var(--gap-sm) 0; display: flex; align-items: baseline; gap: .5rem; }
+  .daytitle:first-child { margin-top: 0; }
+  .daytitle .daycount { font-family: var(--font-sans); font-size: .8rem; color: var(--fg-muted); font-weight: normal; }
+
+  .urgent-card { border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); margin-bottom: var(--gap-lg); }
+  .urgent-picker { display: flex; gap: .5rem; margin-bottom: .6rem; flex-wrap: wrap; }
+  .urgent-picker input[type="text"] { flex: 1 1 16rem; font-family: var(--font-sans); font-size: .92rem; padding: .4rem .6rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--panel); color: var(--fg); }
+  .urgent-picker button { font-size: .8rem; font-weight: 600; padding: .4rem .8rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); cursor: pointer; color: var(--fg); }
+  .urgent-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem; }
+  .chip { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); border-radius: 999px; padding: .2rem .6rem .2rem .7rem; }
+  .chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
+  .urgent-empty { font-size: .8rem; color: var(--fg-muted); }
+
+  .routes-wrap { margin-bottom: var(--gap-lg); }
+  .routes-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: var(--gap-md); }
+  .route-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--pad-md); }
+  .route-card .rtitle { font-weight: 600; font-size: .95rem; margin-bottom: .15rem; display: flex; align-items: center; gap: .4rem; }
+  .route-card .rsub { font-size: .8rem; color: var(--fg-muted); margin-bottom: .6rem; }
+  .route-card .rlist { list-style: none; margin: 0 0 .6rem 0; padding: 0; max-height: 10.5rem; overflow: auto; }
+  .route-card .rlist li { font-size: .8rem; padding: .3rem 0; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+  .route-card .rlist li:first-child { border-top: none; }
+  .route-card .rlist .rname { font-weight: 600; }
+  .route-card .rlist .rtime { color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .route-card .rlist .resp { color: var(--fg-muted); white-space: nowrap; display: flex; align-items: center; gap: .35rem; }
+  .route-card .rseq-toggle { display: block; width: 100%; text-align: center; font-size: .8rem; color: var(--fg-muted); background: none; border: 1px dashed var(--border); border-radius: var(--radius); padding: .35rem; cursor: pointer; margin-bottom: .5rem; }
+  .route-card a.maps-btn { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; font-weight: 600; color: var(--fg); text-decoration: none; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: .4rem .7rem; width: 100%; justify-content: center; }
+  .route-card a.maps-btn:hover { border-color: var(--fg-muted); }
+  .route-card.empty { opacity: .55; }
+
+  .route-diagram { display: none; margin: 0 0 .6rem 0; border-top: 1px dashed var(--border); padding-top: .55rem; }
+  .route-diagram.open { display: block; }
+  .route-diagram .step { display: flex; gap: .55rem; align-items: flex-start; position: relative; padding-bottom: .65rem; }
+  .route-diagram .step:last-child { padding-bottom: 0; }
+  .route-diagram .step:not(:last-child)::before { content: ""; position: absolute; left: .54rem; top: 1.15rem; bottom: -.1rem; width: 2px; background: var(--border); }
+  .route-diagram .dot { flex: none; width: 1.15rem; height: 1.15rem; border-radius: 50%; background: var(--panel); border: 2px solid var(--fg); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; }
+  .route-diagram .meta { font-size: .8rem; line-height: 1.3; }
+  .route-diagram .meta b { display: block; font-weight: 600; }
+  .route-diagram .meta span { color: var(--fg-muted); }
+
+  .tablewrap { max-height: 32rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); -webkit-overflow-scrolling: touch; }
+  table.medtable { width: 100%; min-width: 760px; border-collapse: collapse; font-size: .9rem; }
+  table.medtable th { position: sticky; top: 0; background: var(--panel); text-align: left; padding: .55rem .7rem; font-size: .75rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap; }
+  table.medtable th.nosort { cursor: default; }
+  table.medtable td { padding: .5rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.medtable td.addr, table.medtable td.sched { color: var(--fg-muted); font-size: .8rem; }
+  table.medtable td.chk { text-align: center; }
+  table.medtable td.chk input { width: 1.1rem; height: 1.1rem; cursor: pointer; }
+  table.medtable a.pin { color: var(--fg-muted); text-decoration: none; }
+  table.medtable a.pin:hover { color: var(--fg); }
+  table.medtable tbody tr:hover { background: var(--bg); }
+
+  .foot { font-size: .78rem; color: var(--fg-muted); line-height: 1.6; margin-top: var(--gap-lg); }
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <h1 class="topbar-title">Rota Inteligente de Visitas Médicas</h1>
+  </div>
+  <p class="takeaway">Carregando dados…</p>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="lbl">Médicos no painel</div>
+      <div class="val" data-field="total">—</div>
+    </div>
+    <div class="kpi" style="--kpi-accent: var(--warn)">
+      <div class="lbl">Pendentes de visita</div>
+      <div class="val" data-field="pendentes">—</div>
+      <div class="sub"><span data-field="pendentes_pct">—</span> do painel</div>
+    </div>
+    <div class="kpi" style="--kpi-accent: var(--ok)">
+      <div class="lbl">Já visitados</div>
+      <div class="val" data-field="visitados">—</div>
+      <div class="sub"><span data-field="cobertura_pct">—</span> de cobertura</div>
+    </div>
+    <div class="kpi lx-kpi-rotas">
+      <div class="lbl">Rotas pendentes</div>
+      <div class="val" data-field="n_rotas">—</div>
+      <div class="sub">até 9 paradas cada</div>
+    </div>
+    <div class="kpi lx-kpi-cidades">
+      <div class="lbl">Cidades no ciclo</div>
+      <div class="val" data-field="cidades">—</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button type="button" class="tab-btn active" data-tab="overview">Visão geral</button>
+    <button type="button" class="tab-btn" data-tab="rotas">Rotas</button>
+    <button type="button" class="tab-btn" data-tab="medicos">Médicos</button>
+  </div>
+
+  <div class="card" style="margin-bottom: var(--gap-lg);">
+    <div class="note" style="margin-bottom: var(--pad-sm);">Estes filtros valem para o painel inteiro: tabela, gráficos e rotas sugeridas.</div>
+    <div class="filters">
+      <select class="lx-cidade" aria-label="Cidade"></select>
+      <select class="lx-status" aria-label="Status">
+        <option value="">Todos os status</option>
+        <option value="Pendente">Pendente</option>
+        <option value="Visitado">Visitado</option>
+        <option value="Sem meta">Sem meta</option>
+      </select>
+      <select class="lx-esp" aria-label="Especialidade"></select>
+      <div class="chipgroup lx-quartil-group" role="group" aria-label="Quartil">
+        <span class="glabel">Quartil:</span>
+        <button type="button" class="chipbtn" data-q="Q1">Q1</button>
+        <button type="button" class="chipbtn" data-q="Q2">Q2</button>
+        <button type="button" class="chipbtn" data-q="Q3">Q3</button>
+        <button type="button" class="chipbtn" data-q="Q4">Q4</button>
+        <button type="button" class="chipbtn" data-q="none">Sem quartil</button>
+      </div>
+      <input class="lx-busca" type="text" placeholder="Buscar médico ou CRM…">
+      <button class="lx-reset">Limpar filtros</button>
+    </div>
+  </div>
+
+  <div class="tab-panel active" data-panel="overview">
+    <div class="grid3">
+      <div class="card">
+        <h2>Pendentes por cidade</h2>
+        <div class="note">Atualiza conforme você marca visitas como feitas.</div>
+        <div class="chartbox lx-chart-cidade"></div>
+      </div>
+      <div class="card">
+        <h2>Pendentes por especialidade</h2>
+        <div class="note">Distribuição das visitas que ainda faltam.</div>
+        <div class="chartbox lx-chart-esp"></div>
+      </div>
+      <div class="card">
+        <h2>Status do ciclo</h2>
+        <div class="note">Pendente vs. visitado vs. sem meta no painel inteiro.</div>
+        <div class="chartbox lx-chart-status"></div>
+        <div class="legend lx-legend-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="rotas">
+    <div class="card urgent-card">
+      <h2>🚨 Rota de urgência</h2>
+      <div class="note">
+        Adicione um ou mais médicos de última hora — o painel monta uma rota ao redor deles com outros
+        pendentes do mesmo bairro/cidade, até completar até 9 paradas. Não considera o dia de atendimento
+        de cada um (é fora do planejamento normal); confirme por telefone antes de ir.
+      </div>
+      <div class="urgent-picker">
+        <input type="text" class="lx-urgent-input" list="lx-urgent-list" placeholder="Buscar médico pelo nome…">
+        <datalist id="lx-urgent-list"></datalist>
+        <button type="button" class="lx-urgent-add">+ Adicionar</button>
+      </div>
+      <div class="urgent-chips lx-urgent-chips"></div>
+      <div class="lx-urgent-route"></div>
+    </div>
+
+    <div class="routes-wrap card" id="rotas">
+      <h2>Rotas sugeridas por dia e turno</h2>
+      <div class="note">
+        Cada médico só aparece nos dias em que ele mesmo informou atender; dentro do dia, as paradas são
+        separadas por turno (manhã/tarde, pelo horário informado) e ordenadas pelo horário de atendimento —
+        agrupadas por bairro/cidade em lotes de até 9 para economizar deslocamento. Os de maior potencial
+        (<span class="qbadge">Q1</span>/<span class="qbadge">Q2</span>) vêm destacados. Marque a visita como
+        feita na aba Médicos e ela sai da rota automaticamente. Clique em "Ver sequência" para a ordem de
+        visita, ou abra a rota no Google Maps para o trajeto real com trânsito.
+      </div>
+      <div class="lx-routes"></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="medicos">
+    <div class="card">
+      <h2>Todos os médicos do painel</h2>
+      <div class="note">Marque o check quando concluir a visita — o painel e as rotas atualizam na hora. Clique nos cabeçalhos para ordenar.</div>
+      <div class="tablewrap">
+        <table class="medtable" data-row-key="crm">
+          <thead>
+            <tr>
+              <th data-sort="nome">Médico</th>
+              <th data-sort="especialidade">Especialidade</th>
+              <th data-sort="cidade">Cidade / Bairro</th>
+              <th data-sort="endereco">Endereço</th>
+              <th class="nosort">Atendimento</th>
+              <th data-sort="status">Status</th>
+              <th class="nosort">Feito</th>
+              <th class="nosort"></th>
+            </tr>
+          </thead>
+          <tbody class="lx-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Dados importados da planilha de painel médico enviada — é uma cópia fixa, não uma consulta viva. O check
+    de "visitado" aqui fica salvo no armazenamento local deste navegador (localStorage): funciona só neste
+    computador/navegador e não sincroniza com outros dispositivos nem com a planilha original.<br>
+    As rotas são uma sugestão por dia/turno/bairro, não uma otimização real de trajeto (isso exigiria
+    geocodificar cada endereço com a API do Google Maps); use "Abrir no Google Maps" em cada rota para o
+    trajeto e trânsito reais.
+  </div>
+
+<script>
+/* ======================= CORES ======================= */
+const CHART_COLORS = ['#f5a623', '#8c6bff', '#3ddc97', '#4fa3ff', '#f0615f', '#e0c341', '#ff8dc7', '#59c2ff'];
+let MEDICOS = [];
+let ROTAS = [];
+
+/* ======================= ESTADO (localStorage) ======================= */
+const STORAGE_KEY = 'rota_inteligente_visitas_v1';
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return { cidade: null, status: null, especialidade: null, quartis: [], busca: null, feitos: [], desfeitos: [], urgentes: [] };
+}
+function saveState(s) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+}
+let STATE = loadState();
+if (!Array.isArray(STATE.quartis)) STATE.quartis = STATE.quartil ? [STATE.quartil] : [];
+function setParams(patch) { STATE = { ...STATE, ...patch }; saveState(STATE); renderAll(); }
+function resetParams() {
+  STATE = { cidade: null, status: null, especialidade: null, quartis: [], busca: null, feitos: STATE.feitos, desfeitos: STATE.desfeitos, urgentes: STATE.urgentes };
+  saveState(STATE); renderAll();
+}
+
+(function () {
+  const fmtInt = d3.format(',');
+  const fmtPct = (n) => (n * 100).toFixed(0) + '%';
+
+  function effectiveStatus(m, feitos, desfeitos) {
+    if (desfeitos.has(m.crm)) return 'Pendente';
+    if (feitos.has(m.crm)) return 'Visitado';
+    return m.status;
+  }
+  function statusClass(s) {
+    if (s === 'Pendente') return 'pendente';
+    if (s === 'Visitado') return 'visitado';
+    return 'semmeta';
+  }
+  function mapsSearchUrl(addr) { return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr); }
+
+  // Shared predicate: the same filters (cidade/status/especialidade/quartis/busca) apply
+  // to the table, the overview charts/KPIs AND the suggested routes, so a filter always
+  // reflects everywhere on the dashboard.
+  function passesFilters(m, p, feitos, desfeitos) {
+    const effStatus = effectiveStatus(m, feitos, desfeitos);
+    if (p.cidade && m.cidade !== p.cidade) return false;
+    if (p.status && effStatus !== p.status) return false;
+    if (p.especialidade && m.especialidade !== p.especialidade) return false;
+    if (p.quartis && p.quartis.length) {
+      const key = m.quartil || 'none';
+      if (!p.quartis.includes(key)) return false;
+    }
+    const busca = (p.busca || '').trim().toLowerCase();
+    if (busca && !(m.nome.toLowerCase().includes(busca) || (m.crm || '').toLowerCase().includes(busca))) return false;
+    return true;
+  }
+
+  function hbarChart(el, rows, keyField, valField, color) {
+    el.replaceChildren();
+    if (!rows || !rows.length) { el.style.minHeight = '0'; return; }
+    const width = el.clientWidth || 300;
+    const rowH = 26;
+    const height = rows.length * rowH + 10;
+    const max = d3.max(rows, (d) => d[valField]) || 1;
+
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${width} ${height}`);
+    el.appendChild(svg.node());
+
+    const rowsG = svg.selectAll('g.row').data(rows).join('g').attr('class', 'row').attr('transform', (d, i) => `translate(0, ${i * rowH})`);
+
+    const labelText = rowsG.append('text')
+      .attr('y', rowH / 2).attr('dy', '.32em').attr('text-anchor', 'end')
+      .attr('fill', 'var(--fg)').attr('font-size', '.8rem').text((d) => d[keyField]);
+
+    let maxLabelW = 0;
+    labelText.each(function () { maxLabelW = Math.max(maxLabelW, this.getComputedTextLength()); });
+    const labelW = Math.min(width * 0.52, Math.max(56, maxLabelW + 14));
+    const barAreaW = Math.max(40, width - labelW - 52);
+    const x = d3.scaleLinear().domain([0, max]).range([0, barAreaW]);
+    labelText.attr('x', labelW - 8);
+
+    rowsG.append('rect').attr('x', labelW).attr('y', rowH / 2 - 7)
+      .attr('width', (d) => Math.max(2, x(d[valField]))).attr('height', 14).attr('rx', 4).attr('fill', color);
+
+    rowsG.append('text').attr('x', (d) => labelW + x(d[valField]) + 6).attr('y', rowH / 2).attr('dy', '.32em')
+      .attr('fill', 'var(--fg-muted)').attr('font-size', '.8rem').attr('font-variant-numeric', 'tabular-nums')
+      .text((d) => fmtInt(d[valField]));
+
+    el.style.minHeight = height + 'px';
+  }
+
+  function donutChart(el, legendEl, rows, keyField, valField, colors) {
+    el.replaceChildren(); legendEl.replaceChildren();
+    if (!rows || !rows.length) { el.style.minHeight = '0'; return; }
+    const size = Math.min(el.clientWidth || 260, 260);
+    const radius = size / 2;
+    const thickness = radius * 0.38;
+    const pie = d3.pie().value((d) => d[valField]).sort(null);
+    const arcs = pie(rows);
+    const arcGen = d3.arc().innerRadius(radius - thickness).outerRadius(radius);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${size} ${size}`);
+    const g = svg.append('g').attr('transform', `translate(${size / 2}, ${size / 2})`);
+    g.selectAll('path').data(arcs).join('path').attr('d', arcGen)
+      .attr('fill', (d, i) => colors[i % colors.length]).attr('stroke', 'var(--panel)').attr('stroke-width', 2);
+    el.style.minHeight = size + 'px';
+    el.appendChild(svg.node());
+    legendEl.replaceChildren(...rows.map((d, i) => {
+      const item = document.createElement('span');
+      item.className = 'litem';
+      item.innerHTML = `<span class="swatch" style="background:${colors[i % colors.length]}"></span>${d[keyField]} · ${fmtInt(d[valField])}`;
+      return item;
+    }));
+  }
+
+  let sortState = { field: 'cidade', dir: 1 };
+
+  function applyFilters(medicos, feitos, desfeitos) {
+    const p = STATE;
+    return medicos
+      .map((m) => ({ ...m, _status: effectiveStatus(m, feitos, desfeitos) }))
+      .filter((m) => passesFilters(m, p, feitos, desfeitos));
+  }
+
+  function toggleDone(crm, originalStatus, done) {
+    const feitos = new Set(STATE.feitos || []);
+    const desfeitos = new Set(STATE.desfeitos || []);
+    if (done) {
+      desfeitos.delete(crm);
+      if (originalStatus !== 'Visitado') feitos.add(crm); else feitos.delete(crm);
+    } else {
+      feitos.delete(crm);
+      if (originalStatus === 'Visitado') desfeitos.add(crm); else desfeitos.delete(crm);
+    }
+    setParams({ feitos: Array.from(feitos), desfeitos: Array.from(desfeitos) });
+  }
+
+  function renderTable(rows) {
+    const tbody = document.querySelector('.lx-tbody');
+    const sorted = [...rows].sort((a, b) => {
+      const av = (a[sortState.field] ?? '').toString();
+      const bv = (b[sortState.field] ?? '').toString();
+      return av.localeCompare(bv, 'pt-BR') * sortState.dir;
+    });
+    tbody.replaceChildren(...sorted.map((m) => {
+      const tr = document.createElement('tr');
+      tr.dataset.key = m.crm || '';
+      const sched = [m.dias_atendimento, m.horarios_atendimento].filter(Boolean).join(' · ');
+      const checkable = (m.meta_visitas || 0) >= 1;
+      tr.innerHTML = `
+        <td>${m.nome}</td>
+        <td>${m.especialidade}</td>
+        <td>${m.cidade} · ${m.bairro}</td>
+        <td class="addr">${m.endereco}</td>
+        <td class="sched">${sched || '—'}</td>
+        <td><span class="badge ${statusClass(m._status)}">${m._status}</span></td>
+        <td class="chk"><input type="checkbox" ${m._status === 'Visitado' ? 'checked' : ''} ${checkable ? '' : 'disabled'} aria-label="Marcar ${m.nome} como visitado"></td>
+        <td><a class="pin" title="Abrir no Google Maps" target="_blank" rel="noopener" href="${mapsSearchUrl(m.endereco_maps)}">📍</a></td>
+      `;
+      tr.querySelector('input[type="checkbox"]').addEventListener('change', (e) => toggleDone(m.crm, m.status, e.target.checked));
+      return tr;
+    }));
+  }
+
+  function buildRouteCard(r, feitos, desfeitos, p) {
+    const visibleStops = r.stops.filter((s) => {
+      if (effectiveStatus({ crm: s.crm, status: 'Pendente' }, feitos, desfeitos) === 'Visitado') return false;
+      return !p || passesFilters(s, p, feitos, desfeitos);
+    });
+    const count = visibleStops.length;
+    const altaPrio = visibleStops.filter((s) => s.quartil === 'Q1' || s.quartil === 'Q2').length;
+    const card = document.createElement('div');
+    card.className = 'route-card' + (count === 0 ? ' empty' : '');
+    if (count === 0) {
+      card.innerHTML = `<div class="rtitle">${r.id} · ${r.label}</div><div class="rsub">✅ todas as paradas foram marcadas como visitadas</div>`;
+      return card;
+    }
+    const items = visibleStops.map((s, i) => {
+      const q = s.quartil === 'Q1' || s.quartil === 'Q2' ? `<span class="qbadge">${s.quartil}</span>` : '';
+      return `<li><span class="rname">${i + 1}. ${s.nome}</span><span class="resp">${q}<span class="rtime">${s.horario_ref || '—'}</span><a class="pin" title="Abrir no Google Maps" target="_blank" rel="noopener" href="${mapsSearchUrl(s.endereco_maps)}">📍</a></span></li>`;
+    }).join('');
+    const diagram = visibleStops.map((s, i) => `
+      <div class="step"><div class="dot">${i + 1}</div><div class="meta"><b>${s.nome}</b><span>${s.bairro} · ${s.horario_ref || 'sem horário'}</span></div></div>`).join('');
+    card.innerHTML = `
+      <div class="rtitle">${r.id} <span class="tbadge">${r.turno}</span></div>
+      <div class="rsub">${r.label} · ${count} parada${count > 1 ? 's' : ''}${altaPrio ? ' · ' + altaPrio + ' de alto potencial' : ''}</div>
+      <ul class="rlist">${items}</ul>
+      <button type="button" class="rseq-toggle">👁 Ver sequência da rota</button>
+      <div class="route-diagram">${diagram}</div>
+      <a class="maps-btn" target="_blank" rel="noopener" href="${r.maps_url}">🗺️ Abrir rota no Google Maps</a>
+    `;
+    const toggleBtn = card.querySelector('.rseq-toggle');
+    const diagramEl = card.querySelector('.route-diagram');
+    toggleBtn.addEventListener('click', () => {
+      const open = diagramEl.classList.toggle('open');
+      toggleBtn.textContent = open ? '🙈 Esconder sequência' : '👁 Ver sequência da rota';
+    });
+    return card;
+  }
+
+  const DAY_ORDER = ['Terça-Feira', 'Quarta-Feira', 'Quinta-Feira', 'Sexta-Feira', 'Flexível'];
+
+  function routeStopsMatch(r, feitos, desfeitos, p) {
+    return r.stops.filter((s) => {
+      if (effectiveStatus({ crm: s.crm, status: 'Pendente' }, feitos, desfeitos) === 'Visitado') return false;
+      return !p || passesFilters(s, p, feitos, desfeitos);
+    }).length;
+  }
+
+  function renderRoutes(rotas, feitos, desfeitos, p) {
+    const wrap = document.querySelector('.lx-routes');
+    const withVisible = rotas.filter((r) => routeStopsMatch(r, feitos, desfeitos, p) > 0);
+    if (!withVisible.length) {
+      wrap.replaceChildren();
+      wrap.innerHTML = '<div class="note">Nenhuma rota pendente para este filtro — ajuste os filtros acima ou está tudo visitado por aqui. 🎉</div>';
+      return;
+    }
+    const byDay = d3.group(withVisible, (r) => r.dia);
+    const sections = DAY_ORDER.filter((d) => byDay.has(d)).map((dia) => {
+      const rs = byDay.get(dia);
+      const totalVisible = d3.sum(rs, (r) => routeStopsMatch(r, feitos, desfeitos, p));
+      const wrapper = document.createElement('div');
+      const h = document.createElement('div');
+      h.className = 'daytitle';
+      h.innerHTML = `${dia === 'Flexível' ? 'Sem dia fixo' : dia} <span class="daycount">${rs.length} rota${rs.length > 1 ? 's' : ''} · ${totalVisible} parada${totalVisible > 1 ? 's' : ''} pendente${totalVisible > 1 ? 's' : ''}</span>`;
+      const grid = document.createElement('div');
+      grid.className = 'routes-grid';
+      grid.append(...rs.sort((a, b) => a.id.localeCompare(b.id)).map((r) => buildRouteCard(r, feitos, desfeitos, p)));
+      wrapper.append(h, grid);
+      return wrapper;
+    });
+    wrap.replaceChildren(...sections);
+  }
+
+  function fillSelect(sel, values, allLabel, current) {
+    sel.replaceChildren(new Option(allLabel, ''), ...values.map((v) => new Option(v, v)));
+    sel.value = current || '';
+  }
+
+  function buildMapsUrl(stops) {
+    const addrs = stops.map((s) => s.endereco_maps);
+    if (!addrs.length) return '#';
+    const dest = encodeURIComponent(addrs[addrs.length - 1]);
+    const waypoints = addrs.slice(0, -1).map(encodeURIComponent).join('|');
+    let url = `https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`;
+    if (waypoints) url += `&waypoints=${waypoints}`;
+    return url;
+  }
+  function earliestMinutes(m) {
+    const matches = (m.horarios_atendimento || '').match(/(\d{1,2}):(\d{2})/g) || [];
+    if (!matches.length) return null;
+    return Math.min(...matches.map((t) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm; }));
+  }
+  function fmtTime(mins) {
+    if (mins == null) return null;
+    return String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+  }
+
+  function buildUrgentRoute(all, urgentCrms, feitos, desfeitos) {
+    if (!urgentCrms.length) return null;
+    const effectiveAll = all.map((m) => ({ ...m, _status: effectiveStatus(m, feitos, desfeitos) }));
+    const urgentDocs = urgentCrms.map((crm) => effectiveAll.find((m) => m.crm === crm)).filter(Boolean);
+    if (!urgentDocs.length) return null;
+    const urgentSet = new Set(urgentDocs.map((d) => d.crm));
+    const bairroKeys = new Set(urgentDocs.map((d) => d.cidade + '|' + d.bairro));
+    const cidadeKeys = new Set(urgentDocs.map((d) => d.cidade));
+    const outros = effectiveAll.filter((m) => m._status === 'Pendente' && !urgentSet.has(m.crm));
+    const sameBairro = outros.filter((m) => bairroKeys.has(m.cidade + '|' + m.bairro));
+    const sameCidade = outros.filter((m) => !bairroKeys.has(m.cidade + '|' + m.bairro) && cidadeKeys.has(m.cidade));
+    const CAP = 9;
+    const fillerSlots = Math.max(0, CAP - urgentDocs.length);
+    const filler = [...sameBairro, ...sameCidade].slice(0, fillerSlots);
+    const stops = [...urgentDocs, ...filler].map((m) => ({ ...m, _urgent: urgentSet.has(m.crm), horario_ref: fmtTime(earliestMinutes(m)) }));
+    stops.sort((a, b) => {
+      if (a._urgent !== b._urgent) return a._urgent ? -1 : 1;
+      const am = earliestMinutes(a) ?? 9999; const bm = earliestMinutes(b) ?? 9999;
+      return am - bm;
+    });
+    const cidadeLabel = [...cidadeKeys].join(' + ');
+    const bairroLabel = [...new Set(stops.map((s) => s.bairro))].join(', ');
+    return {
+      id: 'URG', turno: `${urgentDocs.length} urgente${urgentDocs.length > 1 ? 's' : ''} + ${filler.length} por perto`,
+      cidade: cidadeLabel, bairros: [bairroLabel], label: `${cidadeLabel} · ${bairroLabel}`,
+      stops, maps_url: buildMapsUrl(stops), prioridade_alta: 0,
+    };
+  }
+
+  const urgentInput = document.querySelector('.lx-urgent-input');
+  const urgentDatalist = document.querySelector('#lx-urgent-list');
+  const urgentAddBtn = document.querySelector('.lx-urgent-add');
+  const urgentChipsEl = document.querySelector('.lx-urgent-chips');
+
+  function addUrgent() {
+    const raw = urgentInput.value.trim();
+    const m = raw.match(/\(([^()]+)\)\s*$/);
+    if (!m) { urgentInput.value = ''; return; }
+    const crm = m[1].trim();
+    const current = STATE.urgentes || [];
+    if (!current.includes(crm)) setParams({ urgentes: [...current, crm] });
+    urgentInput.value = '';
+  }
+  urgentAddBtn.addEventListener('click', addUrgent);
+  urgentInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addUrgent(); } });
+  urgentChipsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-crm]');
+    if (!btn) return;
+    const current = STATE.urgentes || [];
+    setParams({ urgentes: current.filter((c) => c !== btn.dataset.crm) });
+  });
+
+  const selCidade = document.querySelector('.lx-cidade');
+  const selStatus = document.querySelector('.lx-status');
+  const selEsp = document.querySelector('.lx-esp');
+  const quartilBtns = Array.from(document.querySelectorAll('.lx-quartil-group .chipbtn'));
+  const inpBusca = document.querySelector('.lx-busca');
+
+  selCidade.addEventListener('change', () => setParams({ cidade: selCidade.value || null }));
+  selStatus.addEventListener('change', () => setParams({ status: selStatus.value || null }));
+  selEsp.addEventListener('change', () => setParams({ especialidade: selEsp.value || null }));
+  quartilBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const q = btn.dataset.q;
+      const current = STATE.quartis || [];
+      const next = current.includes(q) ? current.filter((v) => v !== q) : [...current, q];
+      setParams({ quartis: next });
+    });
+  });
+  inpBusca.addEventListener('input', () => setParams({ busca: inpBusca.value || null }));
+  document.querySelector('.lx-reset').addEventListener('click', () => { resetParams(); inpBusca.value = ''; });
+
+  document.querySelectorAll('table.medtable th[data-sort]:not(.nosort)').forEach((th) => {
+    const field = th.dataset.sort;
+    if (!field) return;
+    th.addEventListener('click', () => {
+      sortState = { field, dir: sortState.field === field ? -sortState.dir : 1 };
+      const feitos = new Set(STATE.feitos || []);
+      const desfeitos = new Set(STATE.desfeitos || []);
+      renderTable(applyFilters(MEDICOS, feitos, desfeitos));
+    });
+  });
+
+  const tabBtns = Array.from(document.querySelectorAll('.tab-btn'));
+  const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+  tabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      tabBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      tabPanels.forEach((p) => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
+      renderAll();
+    });
+  });
+
+  window.renderAll = function renderAll() {
+    if (!MEDICOS.length) return;
+    const p = STATE;
+    const feitos = new Set(p.feitos || []);
+    const desfeitos = new Set(p.desfeitos || []);
+
+    const all = MEDICOS.map((m) => ({ ...m, _status: effectiveStatus(m, feitos, desfeitos) }));
+    const filteredAll = all.filter((m) => passesFilters(m, p, feitos, desfeitos));
+    const filtrosAtivos = !!(p.cidade || p.status || p.especialidade || (p.quartis && p.quartis.length) || (p.busca || '').trim());
+
+    const total = filteredAll.length;
+    const pendentes = filteredAll.filter((m) => m._status === 'Pendente').length;
+    const visitados = filteredAll.filter((m) => m._status === 'Visitado').length;
+    const semMeta = filteredAll.filter((m) => m._status === 'Sem meta').length;
+    const cidades = new Set(filteredAll.map((m) => m.cidade)).size;
+    const base = pendentes + visitados || 1;
+    const pendentesPct = total ? pendentes / total : 0;
+    const coberturaPct = visitados / base;
+    const nRotas = ROTAS.filter((r) => routeStopsMatch(r, feitos, desfeitos, p) > 0).length;
+
+    document.querySelector('.takeaway').textContent = filtrosAtivos
+      ? `Com os filtros atuais: ${fmtInt(pendentes)} de ${fmtInt(total)} médicos (${fmtPct(pendentesPct)}) ainda precisam de visita, em ${cidades} cidades — ${nRotas} rotas pendentes refletem esse recorte.`
+      : `${fmtInt(pendentes)} de ${fmtInt(total)} médicos (${fmtPct(pendentesPct)}) ainda precisam de visita neste ciclo, em ${cidades} cidades — organizados em ${nRotas} rotas pendentes.`;
+    document.querySelector('[data-field="total"]').textContent = fmtInt(total);
+    document.querySelector('[data-field="pendentes"]').textContent = fmtInt(pendentes);
+    document.querySelector('[data-field="pendentes_pct"]').textContent = fmtPct(pendentesPct);
+    document.querySelector('[data-field="visitados"]').textContent = fmtInt(visitados);
+    document.querySelector('[data-field="cobertura_pct"]').textContent = fmtPct(coberturaPct);
+    document.querySelector('[data-field="n_rotas"]').textContent = fmtInt(nRotas);
+    document.querySelector('[data-field="cidades"]').textContent = fmtInt(cidades);
+    document.querySelector('.lx-kpi-rotas').style.setProperty('--kpi-accent', CHART_COLORS[0]);
+    document.querySelector('.lx-kpi-cidades').style.setProperty('--kpi-accent', CHART_COLORS[1]);
+
+    const overviewVisible = document.querySelector('[data-panel="overview"]').classList.contains('active');
+    if (overviewVisible) {
+      const porCidade = Array.from(d3.rollup(filteredAll.filter((m) => m._status === 'Pendente'), (v) => v.length, (m) => m.cidade), ([cidade, pendentes]) => ({ cidade, pendentes })).sort((a, b) => b.pendentes - a.pendentes);
+      hbarChart(document.querySelector('.lx-chart-cidade'), porCidade, 'cidade', 'pendentes', 'var(--warn)');
+
+      const porEsp = Array.from(d3.rollup(filteredAll.filter((m) => m._status === 'Pendente'), (v) => v.length, (m) => m.especialidade), ([especialidade, pendentes]) => ({ especialidade, pendentes })).sort((a, b) => b.pendentes - a.pendentes);
+      hbarChart(document.querySelector('.lx-chart-esp'), porEsp, 'especialidade', 'pendentes', CHART_COLORS[1]);
+
+      const statusRows = [
+        { status: 'Pendente', n: pendentes }, { status: 'Visitado', n: visitados }, { status: 'Sem meta', n: semMeta },
+      ].filter((r) => r.n > 0);
+      donutChart(document.querySelector('.lx-chart-status'), document.querySelector('.lx-legend-status'), statusRows, 'status', 'n', ['var(--warn)', 'var(--ok)', 'var(--fg-muted)']);
+    }
+
+    const cidadesOpts = Array.from(new Set(MEDICOS.map((m) => m.cidade))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const espsOpts = Array.from(new Set(MEDICOS.map((m) => m.especialidade))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    if (!selCidade.dataset.filled || selCidade.options.length !== cidadesOpts.length + 1) { fillSelect(selCidade, cidadesOpts, 'Todas as cidades', p.cidade); selCidade.dataset.filled = '1'; }
+    if (!selEsp.dataset.filled || selEsp.options.length !== espsOpts.length + 1) { fillSelect(selEsp, espsOpts, 'Todas as especialidades', p.especialidade); selEsp.dataset.filled = '1'; }
+    selStatus.value = p.status || '';
+    quartilBtns.forEach((btn) => btn.classList.toggle('active', (p.quartis || []).includes(btn.dataset.q)));
+    if (document.activeElement !== inpBusca) inpBusca.value = p.busca || '';
+
+    renderTable(applyFilters(MEDICOS, feitos, desfeitos));
+
+    const pendentesAgora = all.filter((m) => m._status !== 'Visitado');
+    urgentDatalist.replaceChildren(...pendentesAgora.map((m) => { const opt = document.createElement('option'); opt.value = `${m.nome} (${m.crm})`; return opt; }));
+
+    const urgentes = p.urgentes || [];
+    urgentChipsEl.replaceChildren(...urgentes.map((crm) => {
+      const doc = MEDICOS.find((m) => m.crm === crm);
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.innerHTML = `${doc ? doc.nome : crm} <button type="button" data-crm="${crm}" aria-label="Remover">✕</button>`;
+      return chip;
+    }));
+
+    const urgentRouteEl = document.querySelector('.lx-urgent-route');
+    const urgentRoute = buildUrgentRoute(MEDICOS, urgentes, feitos, desfeitos);
+    if (!urgentRoute) {
+      urgentRouteEl.innerHTML = urgentes.length ? '' : '<div class="urgent-empty">Nenhum médico de urgência adicionado ainda.</div>';
+    } else {
+      urgentRouteEl.replaceChildren(buildRouteCard(urgentRoute, feitos, desfeitos));
+    }
+
+    renderRoutes(ROTAS, feitos, desfeitos, p);
+  };
+
+  window.addEventListener('resize', () => { if (document.querySelector('[data-panel="overview"]').classList.contains('active')) window.renderAll(); });
+
+  /* ======================= CARREGAMENTO DOS DADOS ======================= */
+  async function boot() {
+    try {
+      const [p1, p2, rotasRaw] = await Promise.all([
+        fetch('./medicos-1.json').then((r) => r.json()),
+        fetch('./medicos-2.json').then((r) => r.json()),
+        fetch('./rotas.json').then((r) => r.json()),
+      ]);
+      const medicos = [...p1, ...p2].map((m) => ({
+        ...m,
+        endereco_maps: `${m.endereco}, ${m.bairro}, ${m.cidade}, SC`,
+      }));
+      const byCrm = new Map(medicos.map((m) => [m.crm, m]));
+      const rotas = rotasRaw.map((r) => ({
+        ...r,
+        stops: r.stops.map((crm) => byCrm.get(crm)).filter(Boolean),
+      }));
+      MEDICOS = medicos;
+      ROTAS = rotas;
+      window.renderAll();
+    } catch (err) {
+      document.querySelector('.takeaway').textContent = 'Não foi possível carregar os dados (' + err.message + '). Recarregue a página.';
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
